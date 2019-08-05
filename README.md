@@ -135,6 +135,10 @@ As mentioned in stage 2, there are “unlucky” GLIBC load addresses that cause
 
 The version of GLIBC 2.27 that ships with Ubuntu 18.04 LTS was compiled with GCC 7 series which used `movaps` rather than `movups` instructions in some scenarios. This means that if execution hits one of these instructions that is being used to move a value onto the stack and the stack isn’t 16-byte-aligned, it will segfault. This is why it’s important to use the `call rax` gadget rather than a `jmp rax` gadget, it corrects the stack alignment prior to executing the one-gadget.
 
+**This only works when your thread is attached to the main arena.**
+
+Correct. If you are not operating from the main thread but are able to start new threads then repeatedly starting a new thread and calling malloc once to attach the thread to an arena will eventually attach a thread to the main arena. The number of threads it takes to do this is determined by the number of cores available to the process.
+
 ## Credit
 Angelboy developed the wonderful [House of Orange technique](http://4ngelboy.blogspot.com/2016/10/hitcon-ctf-qual-2016-house-of-orange.html), in which file stream exploitation is leveraged via an unsortedbin attack. Skysider pointed out in [their blog](https://blog.skysider.top/2018/07/01/house-of-orange-in-glibc-2-24/#more) that leaving un-mangled function pointers lying around is indeed a terrible idea and the [Malloc Maleficarum](https://dl.packetstormsecurity.net/papers/attack/MallocMaleficarum.txt) taught us that corrupting what was then the `av->max_fast` variable could have dire consequences. david942j developed a great [one-gadget finder](https://github.com/david942j/one_gadget). Zach Riggle maintains the fantastic [pwntools](https://github.com/Gallopsled/pwntools) and [pwndbg](https://github.com/pwndbg/pwndbg) python libraries, which make rapid exploit development prototyping much easier.
 
