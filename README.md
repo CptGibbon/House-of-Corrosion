@@ -155,7 +155,12 @@ The unsortedbin attack served to write a large value over the `global_max_fast` 
 
 Allocate three adjacent chunks, "A", "B" & "C". Chunks "A" and "B" are the same small size e.g. 0x20 and chunk "C" is any size that qualifies for unsortedbin insertion when freed (0x420 and above). Ensure chunk "C" is protected against consolidation with the top chunk.
 
-Free chunk "C" and sort it into a largebin by requesting a larger chunk (e.g. 0x430); either its fd or bk must point to the head of its largebin, this is assured by making chunk "C" the smallest (or only) chunk in that largebin. Free chunk "B" into the tcache, followed by chunk "A". Use the UAF to modify the least-significant byte of chunk "A"'s fd to point at either the fd or bk of chunk "C", linking chunk "C" into the tcache. This works because there are no size field integrity checks on tcache allocations.
+Free chunk "C" and sort it into a largebin by requesting a larger chunk (e.g. 0x430); either its fd or bk must point to the head of its largebin, this is achieved by ensuring that one of the following is true about chunk "C":
+* It is either the largest or smallest chunk in that largebin and the only chunk of its size.
+* If it ties for largest it must have been the first chunk of its size to be linked into that bin.
+* If it ties for smallest it must have been the second chunk of its size to be linked into that bin.
+
+Free chunk "B" into the tcache, followed by chunk "A". Use the UAF to modify the least-significant byte of chunk "A"'s fd to point at either the fd or bk of chunk "C", linking chunk "C" into the tcache. This works because there are no size field integrity checks on tcache allocations.
 
 Leverage the UAF again to modify the two least-significant bytes of chunk "C"'s fd (or bk) to point at the `global_max_fast` variable, this requires guessing 4 bits of load address entropy. Allocate chunk "A" by requesting it from the tcache, then request the same size to allocate chunk "C". The next chunk returned after a request for the same size will overlap `global_max_fast`, which can subsequently be tampered.
 
