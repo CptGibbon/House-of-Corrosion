@@ -189,6 +189,9 @@ In the version of GLIBC used in this example the offset of `__wcpcpy()` is 0xbb4
 
 Finally, trigger the failed assertion in the same way as in the 2.27 attack by sorting the chunk in the unsortedbin into the same largebin as the chunk with the set `NON_MAIN_ARENA` flag. This attempts to print to `stderr` and the `__sync` entry in the `stderr` vtable is called with the address of the `stderr` file stream as the first argument. The `stderr` vtable pointer holds a heap address, the `__sync` entry of which overlaps a pointer to a `add rsi, r8; jmp rsi` gadget. The `add rsi, r8` instruction adds a controlled value to the address of the libc hash table, resulting in the address of `system()`. The `_flags` field of `stderr` holds the string "/bin/sh", resulting in a call to `system("/bin/sh")`.
 
+### Libio vtable hardening
+It's worth noting that the specific version of GLIBC that ships with Ubuntu 19.04 does not fully implement libio vtable hardening as originally designed. The procedures that check whether a file stream's vtable resides in a specific region of memory are intact, but the vtables themselves are mapped into writable memory. It's unclear whether this is intentional. The reason may be due to how the GLIBC Makerules file [checks](https://sourceware.org/git/?p=glibc.git;a=blob;f=Makerules;h=7e4077ee505d2f786ce529f5c0b2f5645d8247f8;hb=fdfc9260b61d3d72541f18104d24c7bcb0ce5ca2#l554) whether a default linker script should be used.
+
 ## References
 Libio vtable hardening was introduced in GLIBC 2.24 \[[commit](https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=db3476aff19b75c4fdefbe65fcd5f0a90588ba51;hp=64ba17317dc9343f0958755ad04af71ec3da637b)\].
 
