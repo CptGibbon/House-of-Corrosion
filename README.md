@@ -8,21 +8,21 @@ Its application against GLIBC 2.29 is described in [Addendum A](#addendum-a).
 * Does not require any leaks.
 
 ### The bad
-* Requires a use-after-free bug.
+* Requires a write-after-free bug.
 * Requires good heap control.
 
 ### The ugly
 * Requires guessing 4 bits of load address entropy.
 
 ### Outline
-The House of Corrosion shares similarities with the House of Orange but is updated to work around exploit mitigations introduced between GLIBC 2.23 and 2.27. Use it to drop a shell when the target binary is position-independent and does not leak the addresses of any of its components. It requires being able to write at least 10 bytes of consecutive data via a use-after-free (UAF) bug. Briefly, it works as follows:
+The House of Corrosion shares similarities with the House of Orange but is updated to work around exploit mitigations introduced between GLIBC 2.23 and 2.27. Use it to drop a shell when the target binary is position-independent and does not leak the addresses of any of its components. It requires being able to write at least 10 bytes of consecutive data via a write-after-free (WAF) bug. Briefly, it works as follows:
 
-* Leverage a UAF bug and guess 4 bits of entropy to direct an unsortedbin attack against the `global_max_fast` variable.
-* Combine heap Feng Shui, the UAF bug and fastbin corruption to tamper members of the `stderr` file stream object.
+* Leverage a WAF bug and guess 4 bits of entropy to direct an unsortedbin attack against the `global_max_fast` variable.
+* Combine heap Feng Shui, the WAF bug and fastbin corruption to tamper members of the `stderr` file stream object.
 * Trigger `stderr` file stream activity to gain code execution.
 
 ## Primitives
-The House of Corrosion relies on three primitives provided by corrupting the `global_max_fast` variable via an unsortedbin attack. Once `global_max_fast` has been overwritten with the address of the unsortedbin, large chunks qualify for fastbin insertion when freed. When combined with a UAF bug, this yields three primitives:
+The House of Corrosion relies on three primitives provided by corrupting the `global_max_fast` variable via an unsortedbin attack. Once `global_max_fast` has been overwritten with the address of the unsortedbin, large chunks qualify for fastbin insertion when freed. When combined with a WAF bug, this yields three primitives:
 
 ### Primitive one
 Freeing a large chunk will link it into the “fastbin” for its size, writing the address of that chunk into an offset from the first fastbin. This allows an attacker to overwrite an 8-byte-aligned quadword with a heap address; the target must reside at an address succeeding the first fastbin.
@@ -33,34 +33,34 @@ Note that there is [a check](https://sourceware.org/git/?p=glibc.git;a=blob;f=ma
 to mitigate this scenario in `_int_free()`, but because `__libc_free()` calls `_int_free()` with a `have_lock` value of 0 it is not performed.
 
 ### Primitive two
-Using the first primitive, free a large chunk to write its address to an offset from the first fastbin. Because the value at that offset is treated as a fastbin entry, it is copied into the freed chunk’s forward pointer (fd). The fd can be tampered with the UAF bug, then returned to its original location by requesting the same chunk back. This allows an attacker to modify variables in-place or replace them entirely with a new value.
+Using the first primitive, free a large chunk to write its address to an offset from the first fastbin. Because the value at that offset is treated as a fastbin entry, it is copied into the freed chunk’s forward pointer (fd). The fd can be tampered with the WAF bug, then returned to its original location by requesting the same chunk back. This allows an attacker to modify variables in-place or replace them entirely with a new value.
 
 ### Primitive three
 Build on primitive two to “transplant” a value from one location to another, tampering it in-flight if necessary.
 
-Craft two chunks, “A” and “B”, with sizes that will link them into the “fastbin” overlapping the destination address when freed. Free chunk “B”, then chunk “A”; use the UAF bug to tamper the least-significant byte of chunk “A”’s fd, which points to chunk “B”, and make it point to chunk “A”. Because the sizes of these chunks are large, they must be created on the heap by allocating two small chunks that reside next to each other, then tampering their size fields with the UAF bug.
+Craft two chunks, “A” and “B”, with sizes that will link them into the “fastbin” overlapping the destination address when freed. Free chunk “B”, then chunk “A”; use the WAF bug to tamper the least-significant byte of chunk “A”’s fd, which points to chunk “B”, and make it point to chunk “A”. Because the sizes of these chunks are large, they must be created on the heap by allocating two small chunks that reside next to each other, then tampering their size fields with the WAF bug.
 
 This requires writing “safe” values to the heap by allocating and freeing chunks. The “safe” values are used to satisfy a check in `_int_free()`; the chunk succeeding the chunk being freed is subject to a [size sanity check](https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=f8e7250f70f6f26b0acb5901bcc4f6e39a8a52b2;hb=23158b08a0908f381459f273a984c6fd328363cb#l4195). This means that freeing a chunk with a modified size field requires a sane size value to be present where the “next” chunk should be. This is achieved by allocating then freeing a chunk so that the top chunk size is written to that location.
 
-Once chunk “A”’s fd has been modified to point to itself, chunk “A” is linked into that “fastbin” twice, the equivalent result of a double-free. Note that this example assumes there is no double-free bug, just a use-after-free. Make a request of the same size to allocate chunk “A”, meaning it can be freed again later but is still linked into the “fastbin” overlapping the destination address.
+Once chunk “A”’s fd has been modified to point to itself, chunk “A” is linked into that “fastbin” twice, the equivalent result of a double-free. Note that this example assumes there is no double-free bug, just a write-after-free. Make a request of the same size to allocate chunk “A”, meaning it can be freed again later but is still linked into the “fastbin” overlapping the destination address.
 
-Leverage the UAF bug again to change the size of chunk “A” to a value that will link it into the “fastbin” overlapping the source address; free it and tamper the value that is copied into the chunk’s fd if required. Using the UAF once more, revert chunk “A”’s size back to the destination value, then request a chunk of that size; the size change must be done to satisfy a [size integrity check](https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=f8e7250f70f6f26b0acb5901bcc4f6e39a8a52b2;hb=23158b08a0908f381459f273a984c6fd328363cb#l3596) in `_int_malloc()`. The result is that a value is “transplanted” from the source address to the destination address and can be tampered along the way. Chunk "A" can be reused in multiple transplants.
+Leverage the WAF bug again to change the size of chunk “A” to a value that will link it into the “fastbin” overlapping the source address; free it and tamper the value that is copied into the chunk’s fd if required. Using the WAF once more, revert chunk “A”’s size back to the destination value, then request a chunk of that size; the size change must be done to satisfy a [size integrity check](https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=f8e7250f70f6f26b0acb5901bcc4f6e39a8a52b2;hb=23158b08a0908f381459f273a984c6fd328363cb#l3596) in `_int_malloc()`. The result is that a value is “transplanted” from the source address to the destination address and can be tampered along the way. Chunk "A" can be reused in multiple transplants.
 
 ## Stages
 The House of Corrosion can be broken down into five stages, two of which leverage the primitives outlined above. The description below covers use of this technique against the GLIBC 2.27 version distributed with Ubuntu 18.04 LTS (BuildID **b417c0ba7cc5cf06d1d1bed6652cedb9253c60d0**).
 
 ### Stage 1: Heap Feng Shui
 * Create “safe” values on the heap by allocating and freeing chunks.
-* Allocate and free chunks such that the UAF bug can be used to tamper size fields.
+* Allocate and free chunks such that the WAF bug can be used to tamper size fields.
 * Sort a chunk into a largebin then tamper its size field.
 * Allocate a chunk for use in the unsortedbin attack.
 * Allocate chunks for use with primitives one & two.
 
 The “safe” values required by primitive three are written to the heap by allocating and freeing chunks of the appropriate size, creating fake size fields further down the heap.
 
-Leveraging a UAF to tamper size fields can be done in a number of ways, one example could be as follows: allocate a chunk of size n from the top chunk, then allocate a chunk immediately afterwards that can be modified after being freed. Free both of these chunks so that they are consolidated with the top chunk. Allocate a third chunk with size n + 0x10 in the space where the first chunk was, then allocate the last chunk immediately after that. The second quadword of user data belonging to the second chunk overlaps the last chunk’s size field, which can be tampered using the UAF.
+Leveraging a WAF to tamper size fields can be done in a number of ways, one example could be as follows: allocate a chunk of size n from the top chunk, then allocate a chunk immediately afterwards that can be modified after being freed. Free both of these chunks so that they are consolidated with the top chunk. Allocate a third chunk with size n + 0x10 in the space where the first chunk was, then allocate the last chunk immediately after that. The second quadword of user data belonging to the second chunk overlaps the last chunk’s size field, which can be tampered using the WAF.
 
-Sorting a chunk into a largebin is as simple as freeing a chunk with size 0x420 or larger into the unsortedbin (chunks with size 0x400 and 0x410 will qualify for the tcache in GLIBC 2.27), then requesting a chunk with size larger than 0x420. Use the UAF bug to set the `NON_MAIN_ARENA` bit in this chunk’s size field once it has been sorted into a largebin. This chunk is used in the final stage to trigger `stderr` activity.
+Sorting a chunk into a largebin is as simple as freeing a chunk with size 0x420 or larger into the unsortedbin (chunks with size 0x400 and 0x410 will qualify for the tcache in GLIBC 2.27), then requesting a chunk with size larger than 0x420. Use the WAF bug to set the `NON_MAIN_ARENA` bit in this chunk’s size field once it has been sorted into a largebin. This chunk is used in the final stage to trigger `stderr` activity.
 
 Any chunk with size 0x420 or larger will qualify for the unsortedbin in GLIBC 2.27, free a chunk with this size in a position that won’t consolidate it with the top chunk to populate its forward (fd) and backward (bk) pointers. This chunk must be the first chunk in the unsortedbin, meaning that it is the most recent chunk to be placed there; this ensures that its bk holds the address of the head of the unsortedbin.
 
@@ -115,7 +115,7 @@ Yes, it will only succeed approximately one in sixteen attempts.
 
 As described here, yes. Everything up until the one-gadget will work ubiquitously however, including the `call rax` gadget since these are so common. You control the address the `call rax` gadget redirects to, it can be any address within the library ASLR zone so creativity is the only limit. Whether the constraints for the one-gadgets in your version of GLIBC are available depends on the final approach. Substituting `_IO_str_overflow()` with `_IO_str_finish()` for example, yields different register control and stack state, as does getting there via `_IO_flush_all_lockp()` rather than `__assert()`.
 
-**Can’t I just use a tcache dup if I have a UAF bug?**
+**Can’t I just use a tcache dup if I have a WAF bug?**
 
 Tcache dups are great if you’re able to leak the load address of GLIBC or otherwise. The House of Corrosion is best leveraged against PIC binaries that don’t leak anything.
 
@@ -125,7 +125,7 @@ Primitive three requires that a heap address be written to the destination first
 
 **What’s a minimal binary this could work against?**
 
-A binary that allows request sizes up to 0x3b00 with around 38 requests total and has a repeatable UAF bug that allows an attacker to write 10 bytes of consecutive data into the first one and a quarter quadwords of a free chunk’s user data. Other than that the binary can be PIC, have full RELRO, NX, stack canaries etc.
+A binary that allows request sizes up to 0x3b00 with around 38 requests total and has a repeatable WAF bug that allows an attacker to write 10 bytes of consecutive data into the first one and a quarter quadwords of a free chunk’s user data. Other than that the binary can be PIC, have full RELRO, NX, stack canaries etc.
 
 **This won’t work in my debugger.**
 
@@ -148,7 +148,7 @@ To do so, two further exploit mitigations must be bypassed:
 * More robust integrity checks during unsortedbin removal.
 * Replacement of the `_allocate_buffer` and `_free_buffer` function pointers with explicit calls to `malloc()` and `free()`.
 
-The improved unsortedbin integrity checks effectively mitigate the unsortedbin attack, although a similar effect can be achieved via a tcache dup. The removal of the `_allocate_buffer` and `_free_buffer` function pointers necessitates an alternate means of bypassing libio vtable protections; this is achieved using the three primitives. The prerequisites are almost identical to the 2.27 attack, except one more byte of use-after-free control is required, bringing the total to 11 bytes. Described below is an example attack against the GLIBC 2.29 version distributed with Ubuntu 19.04 (BuildID **d561ec515222887a1e004555981169199d841024**).
+The improved unsortedbin integrity checks effectively mitigate the unsortedbin attack, although a similar effect can be achieved via a tcache dup. The removal of the `_allocate_buffer` and `_free_buffer` function pointers necessitates an alternate means of bypassing libio vtable protections; this is achieved using the three primitives. The prerequisites are almost identical to the 2.27 attack, except one more byte of write-after-free control is required, bringing the total to 11 bytes. Described below is an example attack against the GLIBC 2.29 version distributed with Ubuntu 19.04 (BuildID **d561ec515222887a1e004555981169199d841024**).
 
 ### Tcache attack
 The unsortedbin attack served to write a large value over the `global_max_fast` variable, this can instead be done by leveraging a tcache dup to overlap a chunk with `global_max_fast`. One way of doing this is as follows:
@@ -160,16 +160,16 @@ Free chunk "C" and sort it into a largebin by requesting a larger chunk (e.g. 0x
 * If it ties for largest it must have been the first chunk of its size to be linked into that bin.
 * If it ties for smallest it must have been the second chunk of its size to be linked into that bin.
 
-Free chunk "B" into the tcache, followed by chunk "A". Use the UAF to modify the least-significant byte of chunk "A"'s fd to point at either the fd or bk of chunk "C", linking chunk "C" into the tcache. This works because there are no size field integrity checks on tcache allocations.
+Free chunk "B" into the tcache, followed by chunk "A". Use the WAF to modify the least-significant byte of chunk "A"'s fd to point at either the fd or bk of chunk "C", linking chunk "C" into the tcache. This works because there are no size field integrity checks on tcache allocations.
 
-Leverage the UAF again to modify the two least-significant bytes of chunk "C"'s fd (or bk) to point at the `global_max_fast` variable, this requires guessing 4 bits of load address entropy. Allocate chunk "A" by requesting it from the tcache, then request the same size to allocate chunk "C". The next chunk returned after a request for the same size will overlap `global_max_fast`, which can subsequently be tampered.
+Leverage the WAF again to modify the two least-significant bytes of chunk "C"'s fd (or bk) to point at the `global_max_fast` variable, this requires guessing 4 bits of load address entropy. Allocate chunk "A" by requesting it from the tcache, then request the same size to allocate chunk "C". The next chunk returned after a request for the same size will overlap `global_max_fast`, which can subsequently be tampered.
 
-Setting up a UAF to modify chunk "C"'s size field means it can also be used in the final stage to trigger the failed assertion, saving the need to sort another chunk into a largebin. Ensure that a chunk is freed into the unsortedbin before tampering `global_max_fast`, it will be used later to sort into a largebin and trigger the failed assertion.
+Setting up a WAF to modify chunk "C"'s size field means it can also be used in the final stage to trigger the failed assertion, saving the need to sort another chunk into a largebin. Ensure that a chunk is freed into the unsortedbin before tampering `global_max_fast`, it will be used later to sort into a largebin and trigger the failed assertion.
 
 ### Changes to stderr corruption
-Only one field of the `stderr` file stream needs to be modified in this version of the House of Corrosion. Use primitive one to write a heap address over the `stderr` vtable pointer. Request a second chunk such that the first quadword of its user data overlaps the `__sync` entry of the "vtable" on the heap. To achieve this these chunks must overlap, which can be done by requesting a small chunk first and tampering its size field with the UAF bug after requesting the second chunk.
+Only one field of the `stderr` file stream needs to be modified in this version of the House of Corrosion. Use primitive one to write a heap address over the `stderr` vtable pointer. Request a second chunk such that the first quadword of its user data overlaps the `__sync` entry of the "vtable" on the heap. To achieve this these chunks must overlap, which can be done by requesting a small chunk first and tampering its size field with the WAF bug after requesting the second chunk.
 
-Use primitive one to extract the value at the `DW.ref.__gcc_personality_v0` symbol into the second chunk's fd, making it the `__sync` entry in the `stderr` vtable which now sits on the heap. This symbol resides just after the `stdin` pointer which itself sits after the `_IO_2_1_stdout_` struct. It contains a pointer to `__gcc_personality_v0`, which is used in this example because it is within range of a useful gadget. Modify the two least-significant bytes of the pointer to `__gcc_personality_v0` with the UAF bug to point at the `add rsi, r8; jmp rsi` gadget in libc at offset 0x32c7a, within the `_nl_intern_locale_data()` function. After disabling libio vtable protection this gadget will be executed when the failed assertion triggers `stderr` activity.
+Use primitive one to extract the value at the `DW.ref.__gcc_personality_v0` symbol into the second chunk's fd, making it the `__sync` entry in the `stderr` vtable which now sits on the heap. This symbol resides just after the `stdin` pointer which itself sits after the `_IO_2_1_stdout_` struct. It contains a pointer to `__gcc_personality_v0`, which is used in this example because it is within range of a useful gadget. Modify the two least-significant bytes of the pointer to `__gcc_personality_v0` with the WAF bug to point at the `add rsi, r8; jmp rsi` gadget in libc at offset 0x32c7a, within the `_nl_intern_locale_data()` function. After disabling libio vtable protection this gadget will be executed when the failed assertion triggers `stderr` activity.
 
 ### Disabling libio vtable protection
 The libio vtable protection improvement from GLIBC 2.27 means that one can no longer write any value to `_dl_open_hook` to disable it. However, using the three primitives to tamper some values related to the libc linkmap and `_rtld_global` struct is enough to convince the `_IO_vtable_check()` [function](https://sourceware.org/git/?p=glibc.git;a=blob;f=libio/vtables.c;h=c464c588c4724c3f27d7aacf2202999d623a19cf;hb=56c86f5dd516284558e106d04b92875d5b623b7a#l39) that this copy of libc is not operating from within the default namespace and therefore should not be subject to vtable integrity checks.
