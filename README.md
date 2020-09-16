@@ -100,7 +100,7 @@ If the above fields were set up correctly, when `_IO_str_overflow()` is called i
 Use primitive three to transplant a GLIBC executable address to this field from the `.data` section, tampering it in-flight to point at a `call rax` gadget. Reusing `__default_morecore()` from the `_IO_buf_end` transplant can save one call to `malloc()`. There must be a `call rax` gadget reachable from the address used here by tampering only its two least-significant bytes, but `call rax` gadgets are plentiful – there are 20 within reach of `__default_morecore()` in the GLIBC version that ships with Ubuntu 18.04 LTS. When searching for these gadgets, ensure that duplicate gadgets aren't being hidden, a common default setting for tools like Ropper.
 
 ### Stage 5: Force stderr activity
-Under the assumption that there is no `stderr` activity and the attacker cannot exit the program to call `_IO_flush_all_lockp()`, triggering a failed assertion in GLIBC will cause an error message to be printed to `stderr`. Since this technique involves heap corruption already, the easiest way to do this is to sort a chunk into a largebin in which the first chunk has a set `NON_MAIN_ARENA` flag. This is because `NON_MAIN_ARENA` flags are not set in free chunks other than fast chunks, the flag is only set when a chunk is allocated to a program.
+Under the assumption that there is no `stderr` activity and the attacker cannot exit the program to call `_IO_flush_all_lockp()`, triggering a failed assertion in GLIBC will cause an error message to be printed to `stderr`. Yes, assert statements aren't supposed to make it into production software, but they do. See the [Considerations](#considerations) section for more information. Since this technique involves heap corruption already, the easiest way to do this is to sort a chunk into a largebin in which the first chunk has a set `NON_MAIN_ARENA` flag. This is because `NON_MAIN_ARENA` flags are not set in free chunks other than fast chunks, the flag is only set when a chunk is allocated to a program.
 
 Calls to `malloc_printerr()` do not use the `stderr` file stream, but the file descriptor (fd) instead, and as of GLIBC 2.27 the `abort()` function no longer calls `_IO_flush_all_lockp()`. This is why the fake chunk at `global_max_fast` is populated in stage 3, requesting any size other than the size of this chunk will sort it into the same largebin as the chunk with the `NON_MAIN_ARENA` flag set and fail [the assertion](https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=f8e7250f70f6f26b0acb5901bcc4f6e39a8a52b2;hb=23158b08a0908f381459f273a984c6fd328363cb#l3830).
 
@@ -122,6 +122,10 @@ Tcache dups are great if you’re able to leak the load address of GLIBC or othe
 **Why not use primitive three to write a value to the free hook?**
 
 Primitive three requires that a heap address be written to the destination first, which will cause a segfault when `free()` is called, which it must be before the final value can be written.
+
+**How did those assert statements get into production software?**
+
+I'm not sure, all I know is that Ubuntu in particular has some oddities in its GLIBC binaries; the assert statements are still present and some versions (e.g. Ubuntu 19.04) also have a broken libio vtable hardening implementation in which the vtable section is mapped writable.
 
 **What’s a minimal binary this could work against?**
 
